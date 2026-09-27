@@ -161,26 +161,79 @@
 
       <div class="view" *ngIf="state.activeTab === 'compare'">
         <section class="panel compare-panel">
-          <div class="panel-heading"><span>权利要求版本比较</span><p-button label="保存当前版本" icon="pi pi-save" (onClick)="versionDialog = true" /></div>
+          <div class="panel-heading"><span>版本变更清单</span><p-button label="保存当前版本" icon="pi pi-save" (onClick)="versionDialog = true" /></div>
           <div class="compare-selects" *ngIf="state.versions.length >= 2; else needVersions">
             <label>基准版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [(ngModel)]="compareA" /></label>
             <label>目标版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [(ngModel)]="compareB" /></label>
           </div>
           <ng-template #needVersions><div class="empty-state large">至少保存两个版本后即可比较。</div></ng-template>
-          <div *ngIf="state.versions.length >= 2" class="diff-list">
-            <article *ngFor="let row of compareRows()" [class.changed]="row.changed">
-              <header><strong>{{ row.label }}</strong><span>{{ row.changed ? '有差异' : '未变化' }}</span></header>
-              <div class="diff-cols">
-                <div><small>基准</small><p>{{ row.before || '（未包含）' }}</p></div>
-                <div><small>目标</small><p>{{ row.after || '（未包含）' }}</p></div>
+          <ng-container *ngIf="state.versions.length >= 2">
+            <div *ngIf="compareA === compareB" class="empty-state">基准版本与目标版本相同，请选择两个不同版本。</div>
+            <ng-container *ngIf="versionComparison as comparison">
+              <div class="diff-summary" *ngIf="comparison.hasChanges">
+                <span class="chip added" *ngIf="comparison.summary.claimsAdded">权利要求新增 {{ comparison.summary.claimsAdded }}</span>
+                <span class="chip removed" *ngIf="comparison.summary.claimsRemoved">权利要求移除 {{ comparison.summary.claimsRemoved }}</span>
+                <span class="chip modified" *ngIf="comparison.summary.claimsModified">权利要求改写 {{ comparison.summary.claimsModified }}</span>
+                <span class="chip added" *ngIf="comparison.summary.featuresAdded">特征新增 {{ comparison.summary.featuresAdded }}</span>
+                <span class="chip removed" *ngIf="comparison.summary.featuresRemoved">特征移除 {{ comparison.summary.featuresRemoved }}</span>
+                <span class="chip modified" *ngIf="comparison.summary.featuresModified">特征改写 {{ comparison.summary.featuresModified }}</span>
               </div>
-            </article>
-          </div>
+              <div *ngIf="!comparison.hasChanges" class="empty-success large"><i class="pi pi-check-circle"></i><strong>两个版本的权利要求与技术特征完全一致。</strong></div>
+
+              <div class="diff-section" *ngIf="comparison.claims.length">
+                <h3>权利要求变更</h3>
+                <article *ngFor="let change of comparison.claims" class="diff-card" [class.added]="change.status === 'added'" [class.removed]="change.status === 'removed'" [class.modified]="change.status === 'modified'">
+                  <header>
+                    <strong>权利要求 {{ change.number }}</strong>
+                    <span class="status-meta" [class]="change.status">{{ statusLabel(change.status) }}</span>
+                  </header>
+                  <div class="field-row" *ngFor="let field of change.fields">
+                    <span class="field-label">{{ field.label }}</span>
+                    <div class="field-values">
+                      <div class="value before" *ngIf="change.status !== 'added'"><small>基准</small><p>{{ field.before || '（空）' }}</p></div>
+                      <div class="value after" *ngIf="change.status !== 'removed'"><small>目标</small><p>{{ field.after || '（空）' }}</p></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="diff-section" *ngIf="comparison.features.length">
+                <h3>技术特征变更</h3>
+                <article *ngFor="let change of comparison.features" class="diff-card" [class.added]="change.status === 'added'" [class.removed]="change.status === 'removed'" [class.modified]="change.status === 'modified'">
+                  <header>
+                    <strong>{{ change.label }}<small class="claim-tag">权利要求 {{ change.claimNumber }}</small></strong>
+                    <span class="status-meta" [class]="change.status">{{ statusLabel(change.status) }}</span>
+                  </header>
+                  <div class="field-row" *ngFor="let field of change.fields">
+                    <span class="field-label">{{ field.label }}</span>
+                    <div class="field-values">
+                      <div class="value before" *ngIf="change.status !== 'added'"><small>基准</small><p>{{ field.before || '（空）' }}</p></div>
+                      <div class="value after" *ngIf="change.status !== 'removed'"><small>目标</small><p>{{ field.after || '（空）' }}</p></div>
+                    </div>
+                  </div>
+                  <div class="field-row" *ngIf="change.references.added.length || change.references.removed.length">
+                    <span class="field-label">引用关系</span>
+                    <div class="set-values">
+                      <span class="set-chip added" *ngFor="let item of change.references.added"><i class="pi pi-plus"></i>{{ item }}</span>
+                      <span class="set-chip removed" *ngFor="let item of change.references.removed"><i class="pi pi-minus"></i>{{ item }}</span>
+                    </div>
+                  </div>
+                  <div class="field-row" *ngIf="change.supports.added.length || change.supports.removed.length">
+                    <span class="field-label">说明书依据</span>
+                    <div class="set-values">
+                      <span class="set-chip added" *ngFor="let item of change.supports.added"><i class="pi pi-plus"></i>{{ item }}</span>
+                      <span class="set-chip removed" *ngFor="let item of change.supports.removed"><i class="pi pi-minus"></i>{{ item }}</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </ng-container>
+          </ng-container>
           <div class="version-history" *ngIf="state.versions.length">
             <h3>版本历史</h3>
             <div class="version-row" *ngFor="let version of state.versions">
-              <span><strong>{{ version.name }}</strong><small>{{ version.createdAt | date:'yyyy-MM-dd HH:mm' }} · {{ version.features.length }} 个特征</small></span>
-              <p-button label="恢复此版" icon="pi pi-history" [outlined]="true" size="small" (onClick)="restoreVersion(version.id)" />
+              <span><strong>{{ version.name }}</strong><small>{{ version.createdAt | date:'yyyy-MM-dd HH:mm' }} · {{ version.claims.length }} 项权利要求 · {{ version.features.length }} 个特征</small></span>
+              <p-button label="恢复此版" icon="pi pi-history" [outlined]="true" size="small" (onClick)="requestRestore(version)" />
             </div>
           </div>
         </section>
@@ -253,4 +306,33 @@
     <p>{{ issue.detail }}</p>
   </div>
   <ng-template pTemplate="footer"><p-button label="关闭" (onClick)="closeIssue()" /></ng-template>
+</p-dialog>
+
+<p-dialog [header]="'恢复版本：' + (restoreTarget?.name || '')" [visible]="!!restoreTarget" (visibleChange)="!$event && cancelRestore()" [modal]="true" [style]="{ width: '640px' }">
+  <div class="dialog-body" *ngIf="restorePreview as preview">
+    <p class="restore-warning"><i class="pi pi-exclamation-triangle"></i>恢复后，当前的权利要求与技术特征将被该版本覆盖（说明书段落与批注不受影响）。以下内容会发生变化：</p>
+    <div class="diff-summary" *ngIf="preview.hasChanges">
+      <span class="chip added" *ngIf="preview.summary.claimsAdded">权利要求新增 {{ preview.summary.claimsAdded }}</span>
+      <span class="chip removed" *ngIf="preview.summary.claimsRemoved">权利要求移除 {{ preview.summary.claimsRemoved }}</span>
+      <span class="chip modified" *ngIf="preview.summary.claimsModified">权利要求改写 {{ preview.summary.claimsModified }}</span>
+      <span class="chip added" *ngIf="preview.summary.featuresAdded">特征新增 {{ preview.summary.featuresAdded }}</span>
+      <span class="chip removed" *ngIf="preview.summary.featuresRemoved">特征移除 {{ preview.summary.featuresRemoved }}</span>
+      <span class="chip modified" *ngIf="preview.summary.featuresModified">特征改写 {{ preview.summary.featuresModified }}</span>
+    </div>
+    <div class="restore-list" *ngIf="preview.hasChanges">
+      <div class="restore-item" *ngFor="let change of preview.claims">
+        <span class="status-meta" [class]="change.status">{{ restoreStatusLabel(change.status) }}</span>
+        <span>权利要求 {{ change.number }}<small>{{ changeAspects(change) }}</small></span>
+      </div>
+      <div class="restore-item" *ngFor="let change of preview.features">
+        <span class="status-meta" [class]="change.status">{{ restoreStatusLabel(change.status) }}</span>
+        <span>{{ change.label }}<small>{{ changeAspects(change) }}</small></span>
+      </div>
+    </div>
+    <p *ngIf="!preview.hasChanges" class="restore-warning calm"><i class="pi pi-check-circle"></i>当前内容与该版本一致，恢复不会产生任何变化。</p>
+  </div>
+  <ng-template pTemplate="footer">
+    <p-button label="取消" severity="secondary" [outlined]="true" (onClick)="cancelRestore()" />
+    <p-button label="确认恢复" icon="pi pi-history" severity="warn" [disabled]="!restorePreview?.hasChanges" (onClick)="confirmRestore()" />
+  </ng-template>
 </p-dialog>

@@ -1,6 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core'
 import { BehaviorSubject, map, type Observable } from 'rxjs'
 import type { Annotation, Claim, ClaimVersion, Feature, Paragraph, Position, Role, ValidationIssue, WorkbenchState } from './models'
+import type { VersionComparison } from './version-diff'
 
 const STORAGE_KEY = 'patent-claim-mapping-workbench-v1'
 const POSITION_KEY = 'patent-claim-mapping-position-v1'
@@ -261,7 +262,9 @@ export class WorkbenchService implements OnDestroy {
     try { return { ...JSON.parse(localStorage.getItem(POSITION_KEY) || '{}'), ...this.stateSubject.value } } catch { return { tab: 'mapping', claimId: this.initialState.selectedClaimId, featureId: this.initialState.selectedFeatureId, scrollY: 0 } }
   }
 
-  exportJson(): string { return JSON.stringify({ ...this.snapshot, validationIssues: this.validate(this.stateSubject.value) }, null, 2) }
+  exportJson(comparison?: VersionComparison | null): string {
+    return JSON.stringify({ ...this.snapshot, validationIssues: this.validate(this.stateSubject.value), versionComparison: comparison ?? null }, null, 2)
+  }
 
   exportCsv(): string {
     const state = this.stateSubject.value

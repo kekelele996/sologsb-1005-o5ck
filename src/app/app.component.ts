@@ -10,7 +10,8 @@ import { BadgeModule } from 'primeng/badge'
 import { DialogModule } from 'primeng/dialog'
 import { TooltipModule } from 'primeng/tooltip'
 import { Subscription } from 'rxjs'
-import type { Annotation, Claim, Feature, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, Claim, ClaimVersion, Feature, Role, ValidationIssue, WorkbenchState } from './models'
+import { compareVersions, type DiffStatus, type VersionComparison } from './version-diff'
 import { WorkbenchService } from './workbench.service'
 
 @Component({
@@ -29,6 +30,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   annotationDraft = ''
   versionDialog = false
   versionName = ''
+  restoreTarget: ClaimVersion | null = null
   activeIssue: ValidationIssue | null = null
   roleOptions: Array<{ label: string; value: Role }> = [
     { label: '代理人（可编辑主数据与本人批注）', value: 'author' },
@@ -118,25 +120,53 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.versionDialog = false
   }
 
-  restoreVersion(id: string): void {
-    this.service.restoreVersion(id)
+  getVersion(id: string) { return this.state.versions.find(item => item.id === id) }
+
+  /** 当前选中的基准/目标两个版本的完整变更清单；未变化的内容不出现在结果中。 */
+  get versionComparison(): VersionComparison | null {
+    const base = this.getVersion(this.compareA)
+    const target = this.getVersion(this.compareB)
+    if (!base || !target || base.id === target.id) return null
+    return compareVersions(base, target, id => this.paragraphLabel(id))
   }
 
-  getVersion(id: string) { return this.state.versions.find(item => item.id === id) }
-  compareRows(): Array<{ label: string; before: string; after: string; changed: boolean }> {
-    const a = this.getVersion(this.compareA)
-    const b = this.getVersion(this.compareB)
-    if (!a || !b) return []
-    const ids = Array.from(new Set([...a.claims.map(item => item.id), ...b.claims.map(item => item.id)]))
-    return ids.map(id => {
-      const before = a.claims.find(item => item.id === id)?.text || ''
-      const after = b.claims.find(item => item.id === id)?.text || ''
-      return { label: `权利要求 ${a.claims.find(item => item.id === id)?.number || b.claims.find(item => item.id === id)?.number || '?'}`, before, after, changed: before !== after }
-    })
+  /** 恢复旧版前的覆盖预览：当前工作状态相对目标版本的差异。 */
+  get restorePreview(): VersionComparison | null {
+    if (!this.restoreTarget) return null
+    const current: ClaimVersion = {
+      id: '__current__', name: '当前工作状态', createdAt: '',
+      claims: this.state.claims, features: this.state.features
+    }
+    return compareVersions(current, this.restoreTarget, id => this.paragraphLabel(id))
+  }
+
+  statusLabel(status: DiffStatus): string {
+    return ({ added: '新增', removed: '移除', modified: '改写' })[status]
+  }
+
+  restoreStatusLabel(status: DiffStatus): string {
+    return ({ added: '将新增', removed: '将移除', modified: '将改写' })[status]
+  }
+
+  /** 恢复预览中一条变更涉及的方面，如“特征名称、引用关系、说明书依据”。 */
+  changeAspects(change: { fields: Array<{ label: string }>; references?: { added: string[]; removed: string[] }; supports?: { added: string[]; removed: string[] } }): string {
+    const aspects = change.fields.map(field => field.label)
+    if (change.references && (change.references.added.length || change.references.removed.length)) aspects.push('引用关系')
+    if (change.supports && (change.supports.added.length || change.supports.removed.length)) aspects.push('说明书依据')
+    return aspects.join('、')
+  }
+
+  requestRestore(version: ClaimVersion): void { this.restoreTarget = version }
+  cancelRestore(): void { this.restoreTarget = null }
+
+  confirmRestore(): void {
+    if (!this.restoreTarget) return
+    this.service.restoreVersion(this.restoreTarget.id)
+    this.restoreTarget = null
   }
 
   exportFile(type: 'json' | 'csv'): void {
-    const content = type === 'json' ? this.service.exportJson() : this.service.exportCsv()
+    const content = type === 'json' ? this.service.exportJson(this.versionComparison) : this.service.exportCsv()
     const mime = type === 'json' ? 'application/json;charset=utf-8' : 'text/csv;charset=utf-8'
     const url = URL.createObjectURL(new Blob([content], { type: mime }))
     const anchor = document.createElement('a')
