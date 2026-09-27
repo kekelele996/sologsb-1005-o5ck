@@ -49,6 +49,48 @@ export interface ClaimVersion {
   features: Feature[]
 }
 
+export type VersionSnapshot = Pick<ClaimVersion, 'claims' | 'features'>
+
+export type ChangeKind = 'added' | 'removed' | 'modified'
+
+export interface FieldChange {
+  field: string
+  before: string
+  after: string
+}
+
+export interface ListChange {
+  field: string
+  added: string[]
+  removed: string[]
+}
+
+export interface ChangeEntry {
+  kind: ChangeKind
+  id: string
+  label: string
+  scope: string
+  detail: string
+  fields: FieldChange[]
+  lists: ListChange[]
+}
+
+export interface DiffSummary {
+  added: number
+  removed: number
+  modified: number
+}
+
+export interface VersionDiff {
+  baseName: string
+  targetName: string
+  generatedAt: string
+  claimChanges: ChangeEntry[]
+  featureChanges: ChangeEntry[]
+  summary: { claims: DiffSummary; features: DiffSummary }
+  identical: boolean
+}
+
 export interface Position {
   tab: string
   claimId: string

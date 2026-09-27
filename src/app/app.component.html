@@ -163,24 +163,18 @@
         <section class="panel compare-panel">
           <div class="panel-heading"><span>权利要求版本比较</span><p-button label="保存当前版本" icon="pi pi-save" (onClick)="versionDialog = true" /></div>
           <div class="compare-selects" *ngIf="state.versions.length >= 2; else needVersions">
-            <label>基准版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [(ngModel)]="compareA" /></label>
-            <label>目标版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [(ngModel)]="compareB" /></label>
+            <label>基准版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [ngModel]="compareA" (ngModelChange)="compareA = $event; refreshCompare()" /></label>
+            <label>目标版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [ngModel]="compareB" (ngModelChange)="compareB = $event; refreshCompare()" /></label>
           </div>
           <ng-template #needVersions><div class="empty-state large">至少保存两个版本后即可比较。</div></ng-template>
-          <div *ngIf="state.versions.length >= 2" class="diff-list">
-            <article *ngFor="let row of compareRows()" [class.changed]="row.changed">
-              <header><strong>{{ row.label }}</strong><span>{{ row.changed ? '有差异' : '未变化' }}</span></header>
-              <div class="diff-cols">
-                <div><small>基准</small><p>{{ row.before || '（未包含）' }}</p></div>
-                <div><small>目标</small><p>{{ row.after || '（未包含）' }}</p></div>
-              </div>
-            </article>
-          </div>
+          <ng-container *ngIf="state.versions.length >= 2 && compareDiff as diff">
+            <ng-container *ngTemplateOutlet="diffView; context: { $implicit: diff }"></ng-container>
+          </ng-container>
           <div class="version-history" *ngIf="state.versions.length">
             <h3>版本历史</h3>
             <div class="version-row" *ngFor="let version of state.versions">
               <span><strong>{{ version.name }}</strong><small>{{ version.createdAt | date:'yyyy-MM-dd HH:mm' }} · {{ version.features.length }} 个特征</small></span>
-              <p-button label="恢复此版" icon="pi pi-history" [outlined]="true" size="small" (onClick)="restoreVersion(version.id)" />
+              <p-button label="恢复此版" icon="pi pi-history" [outlined]="true" size="small" (onClick)="requestRestore(version)" />
             </div>
           </div>
         </section>
@@ -254,3 +248,59 @@
   </div>
   <ng-template pTemplate="footer"><p-button label="关闭" (onClick)="closeIssue()" /></ng-template>
 </p-dialog>
+
+<p-dialog header="恢复版本确认" [visible]="!!restoreTarget" (visibleChange)="!$event && cancelRestore()" [modal]="true" [style]="{ width: '680px' }">
+  <div class="dialog-body" *ngIf="restoreTarget as target">
+    <p>即将把权利要求与技术特征恢复到「<strong>{{ target.name }}</strong>」（{{ target.createdAt | date:'yyyy-MM-dd HH:mm' }}）。当前内容将被覆盖，具体影响如下：</p>
+    <ng-container *ngIf="restoreDiff as diff">
+      <ng-container *ngTemplateOutlet="diffView; context: { $implicit: diff }"></ng-container>
+    </ng-container>
+    <p class="hint">说明：恢复仅覆盖权利要求与技术特征；说明书段落、批注与版本历史保持不变，且该操作可通过撤销回退。</p>
+  </div>
+  <ng-template pTemplate="footer">
+    <p-button label="取消" severity="secondary" [outlined]="true" (onClick)="cancelRestore()" />
+    <p-button label="确认恢复" icon="pi pi-history" severity="warn" [disabled]="!!restoreDiff?.identical" (onClick)="confirmRestore()" />
+  </ng-template>
+</p-dialog>
+
+<ng-template #diffView let-diff>
+  <div class="diff-caption">{{ diff.baseName }} → {{ diff.targetName }} · 生成于 {{ diff.generatedAt | date:'yyyy-MM-dd HH:mm:ss' }}</div>
+  <div *ngIf="diff.identical" class="empty-success"><i class="pi pi-check-circle"></i><span>两份内容完全一致，没有需要核对的差异。</span></div>
+  <ng-container *ngIf="!diff.identical">
+    <div class="diff-summary">
+      <span class="summary-chip">权利要求 <b class="added">+{{ diff.summary.claims.added }}</b><b class="removed">−{{ diff.summary.claims.removed }}</b><b class="modified">~{{ diff.summary.claims.modified }}</b></span>
+      <span class="summary-chip">技术特征 <b class="added">+{{ diff.summary.features.added }}</b><b class="removed">−{{ diff.summary.features.removed }}</b><b class="modified">~{{ diff.summary.features.modified }}</b></span>
+    </div>
+    <ng-container *ngFor="let group of [{ title: '权利要求变更', entries: diff.claimChanges }, { title: '技术特征变更', entries: diff.featureChanges }]">
+      <h3 class="diff-section" *ngIf="group.entries.length">{{ group.title }}</h3>
+      <div class="diff-list">
+        <article *ngFor="let change of group.entries" class="change-card" [class.added]="change.kind === 'added'" [class.removed]="change.kind === 'removed'" [class.modified]="change.kind === 'modified'">
+          <header>
+            <span class="change-tag">{{ changeKindLabel(change.kind) }}</span>
+            <strong>{{ change.label }}</strong>
+            <small>{{ change.scope }} · {{ change.detail }}</small>
+          </header>
+          <ng-container *ngTemplateOutlet="changeBody; context: { $implicit: change }"></ng-container>
+        </article>
+      </div>
+    </ng-container>
+  </ng-container>
+</ng-template>
+
+<ng-template #changeBody let-change>
+  <div class="field-change" *ngFor="let field of change.fields">
+    <span class="field-name">{{ field.field }}</span>
+    <div class="field-diff">
+      <p class="before">{{ field.before || '（空）' }}</p>
+      <i class="pi pi-arrow-right"></i>
+      <p class="after">{{ field.after || '（空）' }}</p>
+    </div>
+  </div>
+  <div class="field-change" *ngFor="let list of change.lists">
+    <span class="field-name">{{ list.field }}</span>
+    <div class="list-diff">
+      <span class="list-item added" *ngFor="let item of list.added">＋ {{ item }}</span>
+      <span class="list-item removed" *ngFor="let item of list.removed">－ {{ item }}</span>
+    </div>
+  </div>
+</ng-template>

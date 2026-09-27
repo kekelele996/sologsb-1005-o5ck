@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core'
 import { BehaviorSubject, map, type Observable } from 'rxjs'
-import type { Annotation, Claim, ClaimVersion, Feature, Paragraph, Position, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, ChangeEntry, Claim, ClaimVersion, DiffSummary, Feature, FieldChange, ListChange, Paragraph, Position, Role, ValidationIssue, VersionDiff, VersionSnapshot, WorkbenchState } from './models'
 
 const STORAGE_KEY = 'patent-claim-mapping-workbench-v1'
 const POSITION_KEY = 'patent-claim-mapping-position-v1'
@@ -29,6 +29,7 @@ const initialAnnotations: Annotation[] = [
   { id: 'annotation-1', featureId: 'feature-b', authorRole: 'examiner', authorName: '审查员 · 李岚', text: '“温湿度数据”是否包括露点等派生数据？建议在从属权利要求中限定。', updatedAt: '2026-09-24T03:10:00.000Z' },
   { id: 'annotation-2', featureId: 'feature-d', authorRole: 'author', authorName: '代理人 · 陈昊', text: '[0024] 已支持分级调节，发布前补充除湿单元与通信模块的连接关系。', updatedAt: '2026-09-24T04:05:00.000Z' }
 ]
+const roleNames: Record<Role, string> = { author: '代理人 · 陈昊', examiner: '审查员 · 李岚', viewer: '观察者' }
 function demoState(): WorkbenchState {
   return {
     claims: initialClaims, paragraphs: initialParagraphs, features: initialFeatures,
@@ -190,9 +191,8 @@ export class WorkbenchService implements OnDestroy {
     const trimmed = text.trim()
     if (!trimmed) return
     const role = this.stateSubject.value.role
-    const names: Record<Role, string> = { author: '代理人 · 陈昊', examiner: '审查员 · 李岚', viewer: '观察者' }
     this.commit(state => state.annotations.push({
-      id: `annotation-${Date.now()}`, featureId, authorRole: role, authorName: names[role], text: trimmed, updatedAt: new Date().toISOString()
+      id: `annotation-${Date.now()}`, featureId, authorRole: role, authorName: roleNames[role], text: trimmed, updatedAt: new Date().toISOString()
     }))
   }
 
@@ -261,7 +261,90 @@ export class WorkbenchService implements OnDestroy {
     try { return { ...JSON.parse(localStorage.getItem(POSITION_KEY) || '{}'), ...this.stateSubject.value } } catch { return { tab: 'mapping', claimId: this.initialState.selectedClaimId, featureId: this.initialState.selectedFeatureId, scrollY: 0 } }
   }
 
-  exportJson(): string { return JSON.stringify({ ...this.snapshot, validationIssues: this.validate(this.stateSubject.value) }, null, 2) }
+  exportJson(versionComparison?: VersionDiff | null): string {
+    return JSON.stringify({ ...this.snapshot, validationIssues: this.validate(this.stateSubject.value), ...(versionComparison ? { versionComparison } : {}) }, null, 2)
+  }
+
+  diffVersions(base: VersionSnapshot, target: VersionSnapshot, baseName = '基准版本', targetName = '目标版本'): VersionDiff {
+    const paragraphs = this.stateSubject.value.paragraphs
+    const featureLabelOf = (id: string | null): string => {
+      if (!id) return '无（顶层特征）'
+      return target.features.find(item => item.id === id)?.label || base.features.find(item => item.id === id)?.label || id
+    }
+    const claimNameOf = (claimId: string): string => {
+      const claim = target.claims.find(item => item.id === claimId) || base.claims.find(item => item.id === claimId)
+      return claim ? `权利要求 ${claim.number}` : '未知权利要求'
+    }
+    const sectionOf = (paragraphId: string): string => paragraphs.find(item => item.id === paragraphId)?.section || paragraphId
+    const listChange = (field: string, beforeIds: string[], afterIds: string[], nameOf: (id: string) => string): ListChange | null => {
+      const added = afterIds.filter(id => !beforeIds.includes(id)).map(nameOf)
+      const removed = beforeIds.filter(id => !afterIds.includes(id)).map(nameOf)
+      return added.length || removed.length ? { field, added, removed } : null
+    }
+    const compact = (items: Array<ListChange | null>): ListChange[] => items.filter((item): item is ListChange => !!item)
+
+    const claimChanges: ChangeEntry[] = []
+    const claimLabelOf = (claim: Claim): string => `权利要求 ${claim.number} · ${claim.title}`
+    for (const claim of [...target.claims].sort((a, b) => a.number - b.number)) {
+      const before = base.claims.find(item => item.id === claim.id)
+      if (!before) {
+        claimChanges.push({ kind: 'added', id: claim.id, label: claimLabelOf(claim), scope: '权利要求', detail: `新增${claim.independent ? '独立' : '从属'}权利要求`, fields: [], lists: [] })
+        continue
+      }
+      const fields: FieldChange[] = []
+      if (before.number !== claim.number) fields.push({ field: '编号', before: String(before.number), after: String(claim.number) })
+      if (before.title !== claim.title) fields.push({ field: '名称', before: before.title, after: claim.title })
+      if (before.independent !== claim.independent) fields.push({ field: '类型', before: before.independent ? '独立权利要求' : '从属权利要求', after: claim.independent ? '独立权利要求' : '从属权利要求' })
+      if (before.text !== claim.text) fields.push({ field: '正文', before: before.text, after: claim.text })
+      if (fields.length) claimChanges.push({ kind: 'modified', id: claim.id, label: claimLabelOf(claim), scope: '权利要求', detail: `改写 ${fields.length} 处`, fields, lists: [] })
+    }
+    for (const claim of base.claims) {
+      if (!target.claims.some(item => item.id === claim.id)) claimChanges.push({ kind: 'removed', id: claim.id, label: claimLabelOf(claim), scope: '权利要求', detail: '该权利要求在新版本中已删除', fields: [], lists: [] })
+    }
+
+    const featureChanges: ChangeEntry[] = []
+    const featureScope = (feature: Feature): string => `技术特征 · ${claimNameOf(feature.claimId)}`
+    const supportList = (beforeIds: string[], afterIds: string[]): ListChange | null => listChange('说明书依据', beforeIds, afterIds, sectionOf)
+    const referenceList = (beforeIds: string[], afterIds: string[]): ListChange | null => listChange('引用关系', beforeIds, afterIds, id => featureLabelOf(id))
+    const featureOrder = (feature: Feature): number => (target.claims.find(item => item.id === feature.claimId) || base.claims.find(item => item.id === feature.claimId))?.number ?? 0
+    for (const feature of [...target.features].sort((a, b) => featureOrder(a) - featureOrder(b) || a.label.localeCompare(b.label, 'zh-CN'))) {
+      const before = base.features.find(item => item.id === feature.id)
+      if (!before) {
+        featureChanges.push({
+          kind: 'added', id: feature.id, label: feature.label, scope: featureScope(feature), detail: '新增技术特征', fields: [],
+          lists: compact([referenceList([], feature.referenceIds), supportList([], feature.supportIds)])
+        })
+        continue
+      }
+      const fields: FieldChange[] = []
+      if (before.label !== feature.label) fields.push({ field: '特征名称', before: before.label, after: feature.label })
+      if (before.text !== feature.text) fields.push({ field: '特征正文', before: before.text || '（空）', after: feature.text || '（空）' })
+      if (before.claimId !== feature.claimId) fields.push({ field: '所属权利要求', before: claimNameOf(before.claimId), after: claimNameOf(feature.claimId) })
+      if (before.parentId !== feature.parentId) fields.push({ field: '父级特征', before: featureLabelOf(before.parentId), after: featureLabelOf(feature.parentId) })
+      if (before.ownerRole !== feature.ownerRole) fields.push({ field: '负责角色', before: roleNames[before.ownerRole], after: roleNames[feature.ownerRole] })
+      const lists = compact([referenceList(before.referenceIds, feature.referenceIds), supportList(before.supportIds, feature.supportIds)])
+      if (fields.length || lists.length) featureChanges.push({ kind: 'modified', id: feature.id, label: feature.label, scope: featureScope(feature), detail: `改写 ${fields.length + lists.length} 处`, fields, lists })
+    }
+    for (const feature of base.features) {
+      if (!target.features.some(item => item.id === feature.id)) {
+        featureChanges.push({
+          kind: 'removed', id: feature.id, label: feature.label, scope: featureScope(feature), detail: '该特征在新版本中已删除', fields: [],
+          lists: compact([referenceList(feature.referenceIds, []), supportList(feature.supportIds, [])])
+        })
+      }
+    }
+
+    const summarize = (entries: ChangeEntry[]): DiffSummary => ({
+      added: entries.filter(item => item.kind === 'added').length,
+      removed: entries.filter(item => item.kind === 'removed').length,
+      modified: entries.filter(item => item.kind === 'modified').length
+    })
+    return {
+      baseName, targetName, generatedAt: new Date().toISOString(), claimChanges, featureChanges,
+      summary: { claims: summarize(claimChanges), features: summarize(featureChanges) },
+      identical: !claimChanges.length && !featureChanges.length
+    }
+  }
 
   exportCsv(): string {
     const state = this.stateSubject.value

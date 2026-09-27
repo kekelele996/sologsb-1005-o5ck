@@ -10,7 +10,7 @@ import { BadgeModule } from 'primeng/badge'
 import { DialogModule } from 'primeng/dialog'
 import { TooltipModule } from 'primeng/tooltip'
 import { Subscription } from 'rxjs'
-import type { Annotation, Claim, Feature, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, ChangeKind, Claim, ClaimVersion, Feature, Role, ValidationIssue, VersionDiff, WorkbenchState } from './models'
 import { WorkbenchService } from './workbench.service'
 
 @Component({
@@ -26,6 +26,9 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   history = { past: 0, future: 0 }
   compareA = ''
   compareB = ''
+  compareDiff: VersionDiff | null = null
+  restoreTarget: ClaimVersion | null = null
+  restoreDiff: VersionDiff | null = null
   annotationDraft = ''
   versionDialog = false
   versionName = ''
@@ -118,25 +121,36 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.versionDialog = false
   }
 
-  restoreVersion(id: string): void {
-    this.service.restoreVersion(id)
+  requestRestore(version: ClaimVersion): void {
+    this.restoreDiff = this.service.diffVersions(
+      { claims: this.state.claims, features: this.state.features }, version, '当前内容', version.name
+    )
+    this.restoreTarget = version
+  }
+
+  confirmRestore(): void {
+    if (!this.restoreTarget) return
+    this.service.restoreVersion(this.restoreTarget.id)
+    this.cancelRestore()
+  }
+
+  cancelRestore(): void {
+    this.restoreTarget = null
+    this.restoreDiff = null
   }
 
   getVersion(id: string) { return this.state.versions.find(item => item.id === id) }
-  compareRows(): Array<{ label: string; before: string; after: string; changed: boolean }> {
+
+  refreshCompare(): void {
     const a = this.getVersion(this.compareA)
     const b = this.getVersion(this.compareB)
-    if (!a || !b) return []
-    const ids = Array.from(new Set([...a.claims.map(item => item.id), ...b.claims.map(item => item.id)]))
-    return ids.map(id => {
-      const before = a.claims.find(item => item.id === id)?.text || ''
-      const after = b.claims.find(item => item.id === id)?.text || ''
-      return { label: `权利要求 ${a.claims.find(item => item.id === id)?.number || b.claims.find(item => item.id === id)?.number || '?'}`, before, after, changed: before !== after }
-    })
+    this.compareDiff = a && b ? this.service.diffVersions(a, b, a.name, b.name) : null
   }
 
+  changeKindLabel(kind: ChangeKind): string { return ({ added: '新增', removed: '移除', modified: '改写' })[kind] }
+
   exportFile(type: 'json' | 'csv'): void {
-    const content = type === 'json' ? this.service.exportJson() : this.service.exportCsv()
+    const content = type === 'json' ? this.service.exportJson(this.compareDiff) : this.service.exportCsv()
     const mime = type === 'json' ? 'application/json;charset=utf-8' : 'text/csv;charset=utf-8'
     const url = URL.createObjectURL(new Blob([content], { type: mime }))
     const anchor = document.createElement('a')
@@ -157,6 +171,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   private syncVersions(): void {
     if (!this.state.versions.some(item => item.id === this.compareA)) this.compareA = this.state.versions[1]?.id || this.state.versions[0]?.id || ''
     if (!this.state.versions.some(item => item.id === this.compareB)) this.compareB = this.state.versions[0]?.id || ''
+    this.refreshCompare()
   }
 
   private handleKeyboard = (event: KeyboardEvent): void => {
